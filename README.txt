@@ -1,3 +1,8 @@
+# C++ Raytracer
+software rasterizer
+
+this code is really gross, i want to go back to refactor and expand on this at some point
+
 for best results use a res of >= 256 pixels, 
 its multithreaded so they dont take too long
 
