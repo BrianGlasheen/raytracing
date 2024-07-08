@@ -1,5 +1,5 @@
-# C++ Raytracer
-software rasterizer
+# C++ Raytracer / Software Rasterizer
+![Alt Text](https://github.com/BrianGlasheen/raytracing/blob/main/resources/output_13.gif?raw=true)
 
 this code is really gross, i want to go back to refactor and expand on this at some point
 
