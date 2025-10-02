@@ -13,6 +13,7 @@
 
 #include <vector>
 #include <random>
+#include <float.h>
 
 using glm::vec3;
 using glm::vec4;
@@ -99,7 +100,7 @@ enum {NO_REFLECT, REFLECT, REFRACT};
 struct ray {
 	vec3 pos;
 	vec3 dir;
-	vec3 color;
+	vec3 color; // todo change to hit info?
 };
 
 struct sphere {
@@ -134,6 +135,90 @@ struct tn { // t and norm
 	float t;
 	vec3 n;
 };
+
+
+struct sphere2 {
+	vec3  center;
+	float radius;
+};
+
+// struct ellipse {
+	// float radius;
+	// mat4 transforms;
+// };
+
+struct plane {
+    vec3 point;
+    vec3 normal;
+};
+
+enum shape_type {
+    SPHERE_ = 0, // todo rm _
+    ELLIPSOID_,
+    PLANE_
+};
+
+struct analytical_shape {
+	shape_type type;
+	union {
+		sphere2 m_sphere;
+		// ellipse m_ellipse;
+		plane m_plane;
+	};
+};
+
+struct hit2 {
+	bool hit;
+	vec3 pos;
+	float t;
+	vec3 norm;
+};
+
+hit2 sphere_ray_intersection(const sphere2& s, const ray& r) {
+    vec3 oc = r.pos - s.center;
+    
+    float a = glm::dot(r.dir, r.dir);
+    float half_b = glm::dot(oc, r.dir); // !!
+    float c = glm::dot(oc, oc) - s.radius * s.radius;
+    
+    float discriminant = half_b * half_b - a * c;
+    
+    if (discriminant < 0.0f) {
+        return {false, vec3(0.0f), FLT_MAX, vec3(0.0f)};
+    }
+    
+    float sqrtd = sqrtf(discriminant);
+    float t = (-half_b - sqrtd) / a;
+    
+    if (t < 0.001f) {
+        t = (-half_b + sqrtd) / a;
+        if (t < 0.001f) {
+            return {false, vec3(0.0f), FLT_MAX, vec3(0.0f)};
+        }
+    }
+    
+    vec3 hit_pos = r.pos + r.dir * t;
+    vec3 normal = (hit_pos - s.center) / s.radius;
+    return {true, hit_pos, t, normal};
+}
+
+hit2 plane_ray_intersection(const plane& p, const ray& r) {
+
+}
+
+hit2 ray_analytical_shape_intersection(const analytical_shape& shape, const ray& r) {
+	// using enum shape_type; c++ 20
+
+	switch (shape.type) {
+		case shape_type::SPHERE_:
+			return sphere_ray_intersection(shape.m_sphere, r);
+		case shape_type::PLANE_:
+			return plane_ray_intersection(shape.m_plane, r);
+		default:
+			assert(false);
+	}
+}
+
 
 
 class Shape {
@@ -392,6 +477,8 @@ struct hit {
 vector<Shape*> scene;
 vector<light> lights;
 
+vector<analytical_shape> scene2;
+
 void normalize(ray* r) { // normalize ray dist
     r->dir = glm::normalize(r->dir);
 }
@@ -438,6 +525,28 @@ vec3 randomSmallVector() {
     static std::uniform_real_distribution<float> dis(-0.1f, 0.1f); // Adjust the range as needed
 
     return vec3(dis(gen), dis(gen), dis(gen));
+}
+
+vec3 trace(const vector<analytical_shape>& scene, const ray& r) {
+	hit2 closest_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
+
+	printf("hi!\n");
+	for (const analytical_shape& shape : scene) {
+
+		printf("AAAAAAA!\n");
+		hit2 hit_info = ray_analytical_shape_intersection(shape, r);
+
+		if (hit_info.hit && hit_info.t < closest_hit.t)
+			closest_hit = hit_info;
+	}
+
+	if (closest_hit.hit) {
+		return vec3(1.0f, 0.0f, 0.0f);
+	}
+
+	vec3 unit_direction = glm::normalize(r.dir);
+    float a = 0.5f *(unit_direction.y + 1.0f);
+    return (1.0f - a) * vec3(1.0f, 1.0f, 1.0f) + a * vec3(0.5f, 0.7f, 1.0f);
 }
 
 void castRay(ray* r, vector<Shape*>& scene, int depth) {
@@ -565,6 +674,23 @@ void castRay(ray* r, vector<Shape*>& scene, int depth) {
 		r->color.b = clamp(bp.b, 0.0f, 1.0f);
 	}
 
+}
+
+void setup2_2() {
+	analytical_shape& s = scene2.emplace_back();
+	s.type = shape_type::SPHERE_;
+	s.m_sphere.center = vec3(-.5f, -1, 1);
+	s.m_sphere.radius = 1;
+
+	analytical_shape& s2 = scene2.emplace_back();
+	s2.type = shape_type::SPHERE_;
+	s2.m_sphere.center = vec3(.5, -1, -1);
+	s2.m_sphere.radius = 1;
+		
+	analytical_shape& s3 = scene2.emplace_back();
+	s3.type = shape_type::SPHERE_;
+	s3.m_sphere.center = vec3(0, 1, 0);
+	s3.m_sphere.radius = 1;
 }
 
 void setup2() {
@@ -973,6 +1099,7 @@ int main(int argc, char **argv)
 		case 1:
 		case 2:
 			setup2();	
+			setup2_2();
 			break;
 
 		case 3:
@@ -1074,11 +1201,48 @@ int main(int argc, char **argv)
 			castRay(r, scene, reflections);
 		});
 	}
-	
+
 	pool.waitAll();
 	Image image = Image(width, height);
 	colorImageRay(image, rays, res, width, height);
 	image.writeToFile("../resources/" + fileName + ".png");
+
+
+
+	vector<ray> rays2;
+	for (float i = h; i > -h; i -= step) {
+		for (float j = -h; j < h; j += step) {
+			ray v;
+			v.dir.x = j + step / 2;
+			v.dir.y = i - step / 2;
+			v.dir.z = -1;
+
+			v.pos.x = j - step / 2;
+			v.pos.y = i - step / 2;
+			v.pos.z = 4;
+
+			v.dir = glm::normalize(v.dir);
+			rays2.push_back(v);
+		}
+	}
+
+
+	Image image2 = Image(width, height);
+
+	int w = width / res;
+//	colorImageRay(image, rays, res, width, height);
+	for (int i = 0; i < width; i++) {
+		for (int j = 0; j < height; j++) {
+			int x = j / w;
+			int y = i / w;
+
+			int idx = x * res + y;
+			vec3 c = trace(scene2, rays2[idx]);
+			image.setPixel(i, height - j - 1, c.r * 255, c.g * 255, c.b * 255);
+		}
+	}
+	
+	image.writeToFile("../resources/" + fileName + "_mine.png");
 
 	return 0;
 }
