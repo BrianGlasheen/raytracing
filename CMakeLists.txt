@@ -1,8 +1,7 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.10)
 
 # Name of the project
-PROJECT(A6)
-
+PROJECT(RT)
 
 # Is this the solution?
 # Override with `cmake -DSOL=ON ..`
@@ -18,6 +17,10 @@ ELSE()
 	FILE(GLOB_RECURSE SOURCES "src/*.cpp")
 	FILE(GLOB_RECURSE HEADERS "src/*.h")
 ENDIF()
+
+include_directories(
+    external/glm
+)
 
 # Set the executable.
 ADD_EXECUTABLE(${CMAKE_PROJECT_NAME} ${SOURCES} ${HEADERS})
