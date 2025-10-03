@@ -8,6 +8,8 @@ output filename doesn't need extension
 
 # new
 
+![Alt Text](resources/box.png)
+
 ![Alt Text](resources/p.png)
 
 ![Alt Text](resources/test.png)
