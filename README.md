@@ -8,8 +8,9 @@ output filename doesn't need extension
 
 # new
 
+![Alt Text](resources/p.png)
+
 ![Alt Text](resources/test.png)
-Artifacts from .gif format
 
 # old 
 

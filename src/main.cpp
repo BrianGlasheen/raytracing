@@ -14,9 +14,9 @@
 // #define TINYOBJLOADER_IMPLEMENTATION
 // #include "tiny_obj_loader.h"
 
-using glm::vec3, glm::vec4, glm::mat4, glm::dot, glm::reflect;
+using glm::vec3, glm::vec4, glm::mat4, glm::mat3, glm::dot, glm::reflect, glm::inverse, glm::determinant, glm::clamp;
 
-using std::vector, std::cout, std::endl, std::cerr, std::stoi, std::string, std::to_string, std::max, std::clamp;
+using std::vector, std::cout, std::endl, std::cerr, std::stoi, std::string, std::to_string, std::max;
 
 typedef uint32_t uint32;
 
@@ -41,7 +41,8 @@ struct light {
 
 enum shape_type {
     SPHERE = 0,
-    PLANE_
+    PLANE,
+	PARALLELOGRAM
 };
 
 struct material {
@@ -50,6 +51,7 @@ struct material {
     float roughness;
     bool refractive;
 	float refraction_index;
+	float emission;
 };
 
 struct sphere {
@@ -60,6 +62,12 @@ struct sphere {
 struct plane {
     vec3 point;
     vec3 normal;
+};
+
+struct parallelogram {
+    vec3 point;
+    vec3 p;
+    vec3 q;
 };
 
 // struct cube
@@ -76,6 +84,7 @@ struct analytical_shape {
 		sphere m_sphere;
 		// ellipse m_ellipse;
 		plane m_plane;
+		parallelogram m_parallelogram;
 	};
 	uint32 material_idx;
 };
@@ -137,6 +146,33 @@ hit plane_ray_intersection(const plane& p, const ray& r) {
     return { true, hit_point, t, normal, 0 };
 }
 
+hit parallelogram_ray_intersection(const parallelogram& para, const ray& r) {
+    vec3 offset = r.pos - para.point;
+
+    mat3 A(-r.dir, para.p, para.q);
+
+    float detA = determinant(A);
+    if (abs(detA) < 1e-6)
+        return { false };
+
+    vec3 tuv = inverse(A) * offset;
+
+    float t = tuv.x;
+    float u = tuv.y;
+    float v = tuv.z;
+
+    if (t < 0 || u < 0 || u > 1 || v < 0 || v > 1)
+        return { false };
+
+    vec3 hit_point = r.pos + t * r.dir;
+    vec3 normal = normalize(cross(para.p, para.q));
+
+	if (dot(normal, r.dir) > 0.0f)
+        normal = -normal;
+
+    return { true, hit_point, t, normal, 0 };
+}
+
 hit ray_analytical_shape_intersection(const analytical_shape& shape, const ray& r) {
 	// using enum shape_type; c++ 20
 	hit hit;
@@ -145,8 +181,11 @@ hit ray_analytical_shape_intersection(const analytical_shape& shape, const ray& 
 		case shape_type::SPHERE:
 			hit = sphere_ray_intersection(shape.m_sphere, r);
 			break;
-		case shape_type::PLANE_:
+		case shape_type::PLANE:
 			hit = plane_ray_intersection(shape.m_plane, r);
+			break;
+		case shape_type::PARALLELOGRAM:
+			hit = parallelogram_ray_intersection(shape.m_parallelogram, r);
 			break;
 		default:
 			assert(false);
@@ -162,6 +201,40 @@ vec3 randomSmallVector() { // todo wtf is this code even CHANGE!!
     static std::uniform_real_distribution<float> dis(-0.1f, 0.1f); // Adjust the range as needed
 
     return vec3(dis(gen), dis(gen), dis(gen));
+}
+
+vec3 random_in_unit_sphere() {
+    while (true) {
+        vec3 p = vec3(
+            (float)rand() / RAND_MAX * 2.0f - 1.0f,
+            (float)rand() / RAND_MAX * 2.0f - 1.0f,
+            (float)rand() / RAND_MAX * 2.0f - 1.0f
+        );
+        if (glm::length(p) < 1.0f) {
+            return p;
+        }
+    }
+}
+
+vec3 cosine_weighted_hemisphere(vec3 normal) {
+    // random point on unit disk
+    float r = sqrt((float)rand() / RAND_MAX);
+    float theta = 2.0f * 3.14159265f * ((float)rand() / RAND_MAX);
+    float x = r * cos(theta);
+    float y = r * sin(theta);
+    
+    // project to hemisphere
+    float z = sqrt(max(0.0f, 1.0f - x*x - y*y));
+    
+    vec3 tangent, bitangent;
+    if (abs(normal.x) > abs(normal.y)) {
+        tangent = vec3(normal.z, 0.0f, -normal.x) / sqrtf(normal.x * normal.x + normal.z * normal.z);
+    } else {
+        tangent = vec3(0.0f, -normal.z, normal.y) / sqrtf(normal.y * normal.y + normal.z * normal.z);
+    }
+    bitangent = glm::cross(normal, tangent);
+    
+    return x * tangent + y * bitangent + z * normal;
 }
 
 // fresnel approx
@@ -216,7 +289,7 @@ vec3 shade(const hit& ray_hit, const vector<analytical_shape>& scene, const vect
         }
     }
     
-    return glm::clamp(color, 0.0f, 1.0f);
+    return clamp(color, 0.0f, 1.0f);
 }
 
 // todo maybe move these guys
@@ -224,7 +297,7 @@ vector<analytical_shape> scene;
 vector<light> lights;
 vector<material> materials;
 
-vec3 trace(const vector<analytical_shape>& scene, const vector<light>& lights, const ray& r, int depth = 0) {
+vec3 trace_whitted(const vector<analytical_shape>& scene, const vector<light>& lights, const ray& r, int depth = 0) {
 	hit closest_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
 
 	for (const analytical_shape& shape : scene) {
@@ -281,13 +354,13 @@ vec3 trace(const vector<analytical_shape>& scene, const vector<light>& lights, c
             ray reflect_ray;
             reflect_ray.pos = closest_hit.pos + outward_normal * 0.001f;
             reflect_ray.dir = reflected;
-            return trace(scene, lights, reflect_ray, depth - 1);
+            return trace_whitted(scene, lights, reflect_ray, depth - 1);
         } else {
             // refract
             ray refract_ray;
             refract_ray.pos = closest_hit.pos - outward_normal * 0.001f;
             refract_ray.dir = refracted;
-            return trace(scene, lights, refract_ray, depth - 1);
+            return trace_whitted(scene, lights, refract_ray, depth - 1);
         }
     }
 
@@ -308,7 +381,7 @@ vec3 trace(const vector<analytical_shape>& scene, const vector<light>& lights, c
 					reflect_ray.pos = closest_hit.pos + closest_hit.norm * 0.001f;
 					reflect_ray.dir = perturbed_dir;
 					
-					accumulated_color += trace(scene, lights, reflect_ray, depth + 1);
+					accumulated_color += trace_whitted(scene, lights, reflect_ray, depth + 1);
 				}
 			}
 			
@@ -319,17 +392,125 @@ vec3 trace(const vector<analytical_shape>& scene, const vector<light>& lights, c
 			reflect_ray.pos = closest_hit.pos + closest_hit.norm * 0.001f;
 			reflect_ray.dir = reflect_dir;
 			
-			reflection_color = trace(scene, lights, reflect_ray, depth + 1);
+			reflection_color = trace_whitted(scene, lights, reflect_ray, depth + 1);
     	}
     } 
     
     return (1.0f - reflectivity) * diffuse_color + reflectivity * reflection_color;
+}
 
+vec3 trace_monte(const vector<analytical_shape>& scene, const ray& r, int depth = 0) {
+	const int MAX_DEPTH = 16;
+    if (depth >= MAX_DEPTH) {
+        return vec3(0.0f);
+    }
+
+	hit closest_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
+
+	for (const analytical_shape& shape : scene) {
+		hit hit_info = ray_analytical_shape_intersection(shape, r);
+		if (hit_info.hit && hit_info.t < closest_hit.t)
+			closest_hit = hit_info;
+	}
+
+	if (!closest_hit.hit) {
+		vec3 unit_dir = glm::normalize(r.dir);
+		float t = 0.5f * (unit_dir.y + 1.0f);
+		return (1.0f - t) * vec3(0.01f, 0.01f, 0.03f) + t * vec3(0.05f, 0.05f, 0.15f);
+	}
+
+	const material& mat = materials[closest_hit.material_idx];
+	vec3 emitted = mat.emission * mat.color;
+
+	// if (depth > 3) {
+    //     float survival_prob = 0.8f;
+    //     if ((float)rand() / RAND_MAX > survival_prob) {
+    //         return emitted;
+    //     }
+    // }
+
+	if (mat.refractive) {
+        vec3 outward_normal;
+        vec3 reflected = reflect(r.dir, closest_hit.norm);
+        float ni_over_nt;
+        vec3 refracted;
+        float reflect_prob;
+        float cosine;
+        
+        if (dot(r.dir, closest_hit.norm) > 0.0f) {
+            // exiting
+            outward_normal = -closest_hit.norm;
+            ni_over_nt = mat.refraction_index;
+            cosine = dot(r.dir, closest_hit.norm) / glm::length(r.dir);
+        } else {
+            // entering
+            outward_normal = closest_hit.norm;
+            ni_over_nt = 1.0f / mat.refraction_index;
+            cosine = -dot(r.dir, closest_hit.norm) / glm::length(r.dir);
+        }
+        
+        if (refract(r.dir, outward_normal, ni_over_nt, refracted)) {
+            reflect_prob = schlick(cosine, mat.refraction_index);
+        } else {
+            // total internal reflection
+            reflect_prob = 1.0f;
+        }
+        
+        if ((float)rand() / RAND_MAX < reflect_prob) {
+            // reflect
+            ray reflect_ray;
+            reflect_ray.pos = closest_hit.pos + outward_normal * 0.001f;
+            reflect_ray.dir = reflected;
+            return emitted + trace_monte(scene, reflect_ray, depth + 1);
+        } else {
+            // refract
+            ray refract_ray;
+            refract_ray.pos = closest_hit.pos - outward_normal * 0.001f;
+            refract_ray.dir = refracted;
+            return emitted + trace_monte(scene, refract_ray, depth + 1);
+        }
+    }
+    
+    if (mat.reflectivity > 0.9f) {
+        vec3 reflect_dir = reflect(r.dir, closest_hit.norm);
+        
+        if (mat.roughness > 0.0f) {
+            reflect_dir = reflect_dir + mat.roughness * random_in_unit_sphere();
+            reflect_dir = glm::normalize(reflect_dir);
+            
+            if (dot(reflect_dir, closest_hit.norm) <= 0.0f) {
+                return emitted;
+            }
+        }
+        
+        ray reflect_ray;
+        reflect_ray.pos = closest_hit.pos + closest_hit.norm * 0.001f;
+        reflect_ray.dir = reflect_dir;
+        
+        vec3 incoming = trace_monte(scene, reflect_ray, depth + 1);
+        return emitted + mat.color * incoming;
+    }
+    
+    // importance sampling
+    vec3 scatter_dir = cosine_weighted_hemisphere(closest_hit.norm);
+    
+    ray scattered;
+    scattered.pos = closest_hit.pos + closest_hit.norm * 0.001f;
+    scattered.dir = scatter_dir;
+    
+    vec3 incoming_light = trace_monte(scene, scattered, depth + 1);
+    
+    // BRDF for Lambertian (diffuse) surface
+    // For cosine-weighted sampling, the pdf cancels with cos_theta/PI
+    // So we just multiply by albedo
+    vec3 reflected = mat.color * incoming_light;
+    
+    return emitted + reflected;
 }
 
 void setup_scene() {
 	analytical_shape& p1 = scene.emplace_back();
-	p1.type = shape_type::PLANE_;
+	p1.type = shape_type::PLANE;
 	p1.m_plane.point = vec3(0.0f, -1.0f, 0.0f);
 	p1.m_plane.normal = vec3(0.0f, 1.0f, 0.0f);
 
@@ -348,7 +529,7 @@ void setup_scene() {
 	s2.m_sphere.center = vec3(1.0f, 0.0f, 1.5f);
 	s2.m_sphere.radius = 0.5f;
 	s2.material_idx = materials.size();
-	materials.push_back({ vec3(0.0f, 1.0f, 0.0f), 0.0f, 0.0f });
+	materials.push_back({ vec3(0.0f, 1.0f, 0.0f), 0.0f, 0.0f, false, 1.0f, 2.0f });
 
 	analytical_shape& s3 = scene.emplace_back();
 	s3.type = shape_type::SPHERE;
@@ -362,7 +543,24 @@ void setup_scene() {
 	s4.m_sphere.center = vec3(0.0f, -0.25f, 3.0f);
 	s4.m_sphere.radius = 0.5f;
 	s4.material_idx = materials.size();
-	materials.push_back({ vec3(0.0f, 1.0f, 1.0f), 0.0f, 0.0f, true, 1.05f });
+	materials.push_back({ vec3(0.0f, 1.0f, 1.0f), 0.0f, 0.0f, true, 1.5f });
+
+	analytical_shape& p2 = scene.emplace_back();
+	p2.type = shape_type::PARALLELOGRAM;
+	p2.m_parallelogram.point = vec3(-1.0f, 1.5f, -1.0f);
+	p2.m_parallelogram.p = vec3(2.0f, 0.0f, 0.0f);
+	p2.m_parallelogram.q = vec3(0.0f, 0.0f, 2.0f);
+	p2.material_idx = materials.size();
+	materials.push_back({ vec3(1.0f, 1.0f, 1.0f), 0.0f, 0.0f, true, 1.00f, 1.0f});
+
+	// struct material {
+	// 	vec3 color;
+	// 	float reflectivity;
+	// 	float roughness;
+	// 	bool refractive;
+	// 	float refraction_index;
+	// 	float emission;
+	// };
 
 	light& l1 = lights.emplace_back();
 	l1.pos = vec3(1.0f, 2.0f, 2.0f);
@@ -416,7 +614,8 @@ int main(int argc, char **argv) {
 			int y = i / w;
 
 			int idx = x * res + y;
-			vec3 c = trace(scene, lights, rays[idx]);
+			// vec3 c = trace_whitted(scene, lights, rays[idx]);
+			vec3 c = clamp(trace_monte(scene, rays[idx]), 0.0f, 1.0f);
 			image.setPixel(i, height - j - 1, c.r * 255, c.g * 255, c.b * 255);
 		}
 	}
