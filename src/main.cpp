@@ -1,3 +1,4 @@
+#include <omp.h>
 #include <iostream>
 #include <string>
 #include <cmath>
@@ -68,6 +69,10 @@ struct parallelogram {
     vec3 point;
     vec3 p;
     vec3 q;
+};
+
+struct box {
+    vec3 point;
 };
 
 // struct cube
@@ -400,7 +405,7 @@ vec3 trace_whitted(const vector<analytical_shape>& scene, const vector<light>& l
 }
 
 vec3 trace_monte(const vector<analytical_shape>& scene, const ray& r, int depth = 0) {
-	const int MAX_DEPTH = 16;
+	const int MAX_DEPTH = 4;
     if (depth >= MAX_DEPTH) {
         return vec3(0.0f);
     }
@@ -422,12 +427,12 @@ vec3 trace_monte(const vector<analytical_shape>& scene, const ray& r, int depth 
 	const material& mat = materials[closest_hit.material_idx];
 	vec3 emitted = mat.emission * mat.color;
 
-	// if (depth > 3) {
-    //     float survival_prob = 0.8f;
-    //     if ((float)rand() / RAND_MAX > survival_prob) {
-    //         return emitted;
-    //     }
-    // }
+	if (depth > 3) {
+        float survival_prob = 0.8f;
+        if ((float)rand() / RAND_MAX > survival_prob) {
+            return emitted;
+        }
+    }
 
 	if (mat.refractive) {
         vec3 outward_normal;
@@ -573,6 +578,57 @@ void setup_scene() {
 	l2.color = vec3(1.5f);
 }
 
+void setup_cornell_box() {
+    analytical_shape& right_wall = scene.emplace_back();
+    right_wall.type = shape_type::PARALLELOGRAM;
+    right_wall.m_parallelogram.point = vec3(555.0f, 0.0f, 0.0f);
+    right_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
+    right_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
+    right_wall.material_idx = materials.size();
+    materials.push_back({ vec3(0.12f, 0.45f, 0.15f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+
+    analytical_shape& left_wall = scene.emplace_back();
+    left_wall.type = shape_type::PARALLELOGRAM;
+    left_wall.m_parallelogram.point = vec3(0.0f);
+    left_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
+    left_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
+    left_wall.material_idx = materials.size();
+    materials.push_back({ vec3(0.65f, 0.05f, 0.05f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+    
+    analytical_shape& light = scene.emplace_back();
+    light.type = shape_type::PARALLELOGRAM;
+    light.m_parallelogram.point = vec3(343.0f, 554.0f, 332.0f);
+    light.m_parallelogram.p = vec3(-130.0f, 0.0f, 0.0f);
+    light.m_parallelogram.q = vec3(0.0f, 0.0f, -105.0f);
+    light.material_idx = materials.size();
+    materials.push_back({ vec3(1.0f), 0.0f, 0.0f, false, 1.0f, 10.0f });
+
+    size_t white_wall_mat = materials.size();
+    materials.push_back({ vec3(0.73f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+
+    analytical_shape& floor = scene.emplace_back();
+    floor.type = shape_type::PARALLELOGRAM;
+    floor.m_parallelogram.point = vec3(0.0f);
+    floor.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
+    floor.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
+    floor.material_idx = white_wall_mat;
+
+    analytical_shape& top = scene.emplace_back();
+    top.type = shape_type::PARALLELOGRAM;
+    top.m_parallelogram.point = vec3(555.0f);
+    top.m_parallelogram.p = vec3(-555.0f, 0.0f, 0.0f);
+    top.m_parallelogram.q = vec3(0.0f, 0.0f, -555.0f);
+    top.material_idx = white_wall_mat;
+
+    // world.add(make_shared<quad>(point3(0,0,555), vec3(555,0,0), vec3(0,555,0), white));
+    analytical_shape& back = scene.emplace_back();
+    back.type = shape_type::PARALLELOGRAM;
+    back.m_parallelogram.point = vec3(0.0f, 0.0f, 555.0f);
+    back.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
+    back.m_parallelogram.q = vec3(0.0f, 555.0f, 0.0f);
+    back.material_idx = white_wall_mat;
+}
+
 // usage ./RT <IMAGE SIZE> <IMAGE FILENAME>
 int main(int argc, char **argv) {
 	int imageSize(stoi(argv[1]));
@@ -585,29 +641,46 @@ int main(int argc, char **argv) {
 
 	vector<ray> rays; // todo alloc total rays
 
-	float h = tan((M_PI * 0.5 * 45) / 180.0);
-	float step = 2 * h / res;
-	for (float i = h; i > -h; i -= step) {
-		for (float j = -h; j < h; j += step) {
-			ray v;
-			v.dir.x = j + step / 2;
-			v.dir.y = i - step / 2;
-			v.dir.z = -1;
 
-			v.pos.x = j - step / 2;
-			v.pos.y = i - step / 2;
-			v.pos.z = 4;
+    vec3 camera_pos = vec3(278, 278, -800);
+    vec3 camera_target = vec3(278, 278, 0);
+    vec3 camera_up = vec3(0.0f, 1.0f, 0.0f);
 
-			v.dir = glm::normalize(v.dir);
-			rays.push_back(v);
-		}
-	}
+    vec3 forward = glm::normalize(camera_target - camera_pos);
+    vec3 right = glm::normalize(glm::cross(forward, camera_up));
+    vec3 up = glm::cross(right, forward);
+    
+    float fov = 40.0f;
+    float aspect = (float)width / (float)height;
+    float h = tan((fov * 0.5f * M_PI) / 180.0f);
+    float viewport_height = 2.0f * h;
+    float viewport_width = viewport_height * aspect;
+    
+    for (int row = 0; row < res; row++) {
+        for (int col = 0; col < res; col++) {
+            float u = (col + 0.5f) / res;
+            float v = (row + 0.5f) / res;
+            
+            float x = (2.0f * u - 1.0f) * viewport_width * 0.5f;
+            float y = (1.0f - 2.0f * v) * viewport_height * 0.5f; // Flip Y
+            
+            ray r;
+            r.pos = camera_pos;
+            r.dir = glm::normalize(forward + x * right + y * up);
+            
+            rays.push_back(r);
+        }
+    }
 
-	setup_scene();
+    // setup_scene();
+	setup_cornell_box();
 
 	Image image = Image(width, height);
 	int w = width / res;
+
+    #pragma omp parallel for schedule(dynamic)
 	for (int i = 0; i < width; i++) {
+        // #pragma omp critical
 		printf("%d / %d\n", i, width);
 		for (int j = 0; j < height; j++) {
 			int x = j / w;
@@ -615,7 +688,16 @@ int main(int argc, char **argv) {
 
 			int idx = x * res + y;
 			// vec3 c = trace_whitted(scene, lights, rays[idx]);
-			vec3 c = clamp(trace_monte(scene, rays[idx]), 0.0f, 1.0f);
+
+            int samples_per_pixel = 200;
+
+            vec3 c(0.0f);
+            for (int s = 0; s < samples_per_pixel; s++) {
+                c += trace_monte(scene, rays[idx], 0);
+    			// vec3 c = clamp(trace_monte(scene, rays[idx]), 0.0f, 1.0f);
+            }
+
+            c = clamp(c / (float)samples_per_pixel, 0.0f, 1.0f);
 			image.setPixel(i, height - j - 1, c.r * 255, c.g * 255, c.b * 255);
 		}
 	}
