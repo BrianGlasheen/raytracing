@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 #include <cmath>
-#include <unistd.h>
+//#include <unistd.h>
 #include <vector>
 #include <random>
 #include <float.h>
@@ -14,6 +14,8 @@
 
 // #define TINYOBJLOADER_IMPLEMENTATION
 // #include "tiny_obj_loader.h"
+
+#define M_PI 3.1415
 
 using glm::vec3, glm::vec4, glm::mat4, glm::mat3, glm::dot, glm::reflect, glm::inverse, glm::determinant, glm::clamp;
 
@@ -689,7 +691,7 @@ int main(int argc, char **argv) {
 			int idx = x * res + y;
 			// vec3 c = trace_whitted(scene, lights, rays[idx]);
 
-            int samples_per_pixel = 200;
+            int samples_per_pixel = 50;
 
             vec3 c(0.0f);
             for (int s = 0; s < samples_per_pixel; s++) {
