@@ -8,93 +8,22 @@
 #include <float.h>
 #include <algorithm>
 
+#include "model.h"
+#include "bvh.h"
+#include "math.h"
+#include "types.h"
+
 #include "Image.h"
-#include "glm/glm.hpp"
-#include "glm/gtc/matrix_transform.hpp"
 
-// #define TINYOBJLOADER_IMPLEMENTATION
-// #include "tiny_obj_loader.h"
+using std::vector, std::stoi, std::string, std::to_string, std::max, std::min;
 
-#define M_PI 3.1415
-
-using glm::vec3, glm::vec4, glm::mat4, glm::mat3, glm::dot, glm::reflect, glm::inverse, glm::determinant, glm::clamp;
-
-using std::vector, std::cout, std::endl, std::cerr, std::stoi, std::string, std::to_string, std::max;
-
-typedef uint32_t uint32;
-
-struct ray {
-	vec3 pos;
-	vec3 dir;
-};
-
-struct hit {
-	bool hit;
-	vec3 pos;
-	float t;
-	vec3 norm;
-	uint32 material_idx;
-};
-
-struct light {
-	vec3 pos;
-	float intensity;
-	vec3 color;
-};
-
-enum shape_type {
-    SPHERE = 0,
-    PLANE,
-	PARALLELOGRAM
-};
-
-struct material {
-	vec3 color;
-    float reflectivity;
-    float roughness;
-    bool refractive;
-	float refraction_index;
-	float emission;
-};
-
-struct sphere {
-	vec3  center;
-	float radius;
-};
-
-struct plane {
-    vec3 point;
-    vec3 normal;
-};
-
-struct parallelogram {
-    vec3 point;
-    vec3 p;
-    vec3 q;
-};
-
-struct box {
-    vec3 point;
-};
-
-// struct cube
-// struct torus
-// struct parallelogram
-// struct infinite cylinder
-// struct disk (finite cylinder)
-// struct cone?
-
-struct analytical_shape {
-	// todo aabb
-	shape_type type;
-	union {
-		sphere m_sphere;
-		// ellipse m_ellipse;
-		plane m_plane;
-		parallelogram m_parallelogram;
-	};
-	uint32 material_idx;
-};
+vector<vec3> positions;
+vector<vec3> normals;
+vector<vec2> texcoords;
+vector<uint32> indices;
+mat4 model, inv_model;
+vector<bvh_node> bvh;
+size_t mat;
 
 // todo mesh
 // struct mesh {
@@ -117,7 +46,7 @@ hit sphere_ray_intersection(const sphere& s, const ray& r) {
     float discriminant = half_b * half_b - a * c;
     
     if (discriminant < 0.0f)
-        return {false, vec3(0.0f), FLT_MAX, vec3(0.0f)};
+        return RAY_MISS;
     
     float sqrtd = sqrtf(discriminant);
     float t = (-half_b - sqrtd) / a;
@@ -125,7 +54,7 @@ hit sphere_ray_intersection(const sphere& s, const ray& r) {
     if (t < 0.001f) {
         t = (-half_b + sqrtd) / a;
         if (t < 0.001f)
-            return {false, vec3(0.0f), FLT_MAX, vec3(0.0f)};
+            return RAY_MISS;
     }
     
     vec3 hit_pos = r.pos + r.dir * t;
@@ -137,12 +66,12 @@ hit plane_ray_intersection(const plane& p, const ray& r) {
     float denom = dot(p.normal, r.dir);
     
     if (fabsf(denom) < 1e-6f)
-        return {false, vec3(0.0f), FLT_MAX, vec3(0.0f)};
+        return RAY_MISS;
     
     float t = dot(p.point - r.pos, p.normal) / denom;
     
     if (t < 0.001f)
-        return {false, vec3(0.0f), FLT_MAX, vec3(0.0f)};
+        return RAY_MISS;
     
     vec3 hit_point = r.pos + r.dir * t;
 
@@ -160,7 +89,7 @@ hit parallelogram_ray_intersection(const parallelogram& para, const ray& r) {
 
     float detA = determinant(A);
     if (abs(detA) < 1e-6)
-        return { false };
+        return RAY_MISS;
 
     vec3 tuv = inverse(A) * offset;
 
@@ -169,7 +98,7 @@ hit parallelogram_ray_intersection(const parallelogram& para, const ray& r) {
     float v = tuv.z;
 
     if (t < 0 || u < 0 || u > 1 || v < 0 || v > 1)
-        return { false };
+        return RAY_MISS;
 
     vec3 hit_point = r.pos + t * r.dir;
     vec3 normal = normalize(cross(para.p, para.q));
@@ -200,6 +129,68 @@ hit ray_analytical_shape_intersection(const analytical_shape& shape, const ray& 
 
 	hit.material_idx = shape.material_idx;
 	return hit;
+}
+
+hit ray_triangle_intersection(uint32 index, const ray& r) {
+    const vec3 edge1 = positions[indices[index + 1]] - positions[indices[index]];
+    const vec3 edge2 = positions[indices[index + 2]] - positions[indices[index]];
+
+    //const vec3 edge1 = positions[indices[index + 1]] - positions[indices[index]];
+    //const vec3 edge2 = positions[indices[index + 2]] - positions[indices[index]];
+
+    const vec3 h = cross(r.dir, edge2);
+    const float a = dot(edge1, h);
+    if (a > -0.0001f && a < 0.0001f)
+        return RAY_MISS; // ray parallel to triangle
+    
+    const float f = 1 / a;
+    const vec3 s = r.pos - positions[indices[index]];
+    const float u = f * dot(s, h);
+    if (u < 0 || u > 1)
+        return RAY_MISS;
+    
+    const vec3 q = cross(s, edge1);
+    const float v = f * dot(r.dir, q);
+    if (v < 0 || u + v > 1)
+        return RAY_MISS;
+
+    const float t = f * dot(edge2, q);
+    if (t < 0.0001f)
+        return RAY_MISS;
+
+    vec3 hit_point = r.pos + t * r.dir;
+    vec3 normal = normalize(cross(edge1, edge2));
+    return { true, hit_point, t, normal, 0 };
+}
+
+bool ray_aabb_intersection_bool(const ray& r, const vec3& bmin, const vec3& bmax) {
+    float tx1 = (bmin.x - r.pos.x) / r.dir.x, tx2 = (bmax.x - r.pos.x) / r.dir.x;
+    float tmin = min(tx1, tx2), tmax = max(tx1, tx2);
+    float ty1 = (bmin.y - r.pos.y) / r.dir.y, ty2 = (bmax.y - r.pos.y) / r.dir.y;
+    tmin = max(tmin, min(ty1, ty2)), tmax = min(tmax, max(ty1, ty2));
+    float tz1 = (bmin.z - r.pos.z) / r.dir.z, tz2 = (bmax.z - r.pos.z) / r.dir.z;
+    tmin = max(tmin, min(tz1, tz2)), tmax = min(tmax, max(tz1, tz2));
+    return tmax >= tmin && tmax > 0;
+}
+
+void ray_bvh_intersection(const ray& ray, const uint32 node_index, hit& closest_hit) {
+    bvh_node& node = bvh[node_index];
+    if (!ray_aabb_intersection_bool(ray, node.aabb_min, node.aabb_max))
+        return;
+
+    if (node.primCount > 0) {
+        for (uint32_t i = 0; i < node.primCount; i++) {
+            uint32_t tri_index = (node.firstPrim * 3) + i;
+            hit h = ray_triangle_intersection(tri_index, ray);
+            if (h.hit && h.t < closest_hit.t) {
+                closest_hit = h;
+            }
+        }
+    }
+    else {
+        ray_bvh_intersection(ray, node.left, closest_hit);
+        ray_bvh_intersection(ray, node.left + 1, closest_hit);
+    }
 }
 
 vec3 randomSmallVector() { // todo wtf is this code even CHANGE!!
@@ -419,11 +410,45 @@ vec3 trace_monte(const vector<analytical_shape>& scene, const ray& r, int depth 
 		if (hit_info.hit && hit_info.t < closest_hit.t)
 			closest_hit = hit_info;
 	}
+#define BVH 1
+#if !BVH
+    for (uint32 i = 0; i < indices.size(); i += 3) {
+        ray r_obj;
+        r_obj.pos = vec3((inv_model * glm::vec4(r.pos, 1.0f)));
+        r_obj.dir = vec3(normalize(inv_model * glm::vec4(r.dir, 0.0f)));
+
+        hit hit_info = ray_triangle_intersection(i, r_obj);
+        if (hit_info.hit && hit_info.t < closest_hit.t) {
+            closest_hit.hit = true;
+            closest_hit.t = hit_info.t;
+            closest_hit.pos = vec3(model * glm::vec4(hit_info.pos, 1.0f));
+            closest_hit.norm = vec3(normalize(glm::transpose(inv_model) * glm::vec4(hit_info.norm, 0.0f)));
+            closest_hit.material_idx = 0;
+        }
+    }
+#else
+    ray r_obj;
+    r_obj.pos = vec3((inv_model * glm::vec4(r.pos, 1.0f)));
+    r_obj.dir = vec3(normalize(inv_model * glm::vec4(r.dir, 0.0f)));
+
+    //const ray& ray, const uint32 node_index, hit& closest_hit
+    hit bvh_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
+    ray_bvh_intersection(r_obj, 0, bvh_hit);
+
+    if (bvh_hit.hit && bvh_hit.t < closest_hit.t) {
+        closest_hit.hit = true;
+        closest_hit.t = bvh_hit.t;
+        closest_hit.pos = vec3(model * glm::vec4(bvh_hit.pos, 1.0f));
+        closest_hit.norm = vec3(normalize(glm::transpose(inv_model) * glm::vec4(bvh_hit.norm, 0.0f)));
+        closest_hit.material_idx = mat;
+    }
+#endif
 
 	if (!closest_hit.hit) {
-		vec3 unit_dir = glm::normalize(r.dir);
-		float t = 0.5f * (unit_dir.y + 1.0f);
-		return (1.0f - t) * vec3(0.01f, 0.01f, 0.03f) + t * vec3(0.05f, 0.05f, 0.15f);
+        return vec3(0.0f);
+        //vec3 unit_dir = glm::normalize(r.dir);
+		//float t = 0.5f * (unit_dir.y + 1.0f);
+		//return (1.0f - t) * vec3(0.01f, 0.01f, 0.03f) + t * vec3(0.05f, 0.05f, 0.15f);
 	}
 
 	const material& mat = materials[closest_hit.material_idx];
@@ -587,7 +612,14 @@ void setup_cornell_box() {
     right_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
     right_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
     right_wall.material_idx = materials.size();
-    materials.push_back({ vec3(0.12f, 0.45f, 0.15f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+    materials.push_back({
+        .color = vec3(0.12f, 0.45f, 0.15f),
+        .reflectivity = 0.0f,
+        .roughness = 0.0f,
+        .refractive = false,
+        .refraction_index = 1.0f,
+        .emission = 0.0f
+    });
 
     analytical_shape& left_wall = scene.emplace_back();
     left_wall.type = shape_type::PARALLELOGRAM;
@@ -595,7 +627,14 @@ void setup_cornell_box() {
     left_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
     left_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
     left_wall.material_idx = materials.size();
-    materials.push_back({ vec3(0.65f, 0.05f, 0.05f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+    materials.push_back({
+        .color = vec3(0.65f, 0.05f, 0.05f),
+        .reflectivity = 0.0f,
+        .roughness = 0.0f,
+        .refractive = false,
+        .refraction_index = 1.0f,
+        .emission = 0.0f
+    });
     
     analytical_shape& light = scene.emplace_back();
     light.type = shape_type::PARALLELOGRAM;
@@ -603,10 +642,24 @@ void setup_cornell_box() {
     light.m_parallelogram.p = vec3(-130.0f, 0.0f, 0.0f);
     light.m_parallelogram.q = vec3(0.0f, 0.0f, -105.0f);
     light.material_idx = materials.size();
-    materials.push_back({ vec3(1.0f), 0.0f, 0.0f, false, 1.0f, 10.0f });
+    materials.push_back({
+        .color = vec3(1.0f),
+        .reflectivity = 0.0f,
+        .roughness = 0.0f,
+        .refractive = false,
+        .refraction_index = 1.0f,
+        .emission = 10.0f
+    });
 
     size_t white_wall_mat = materials.size();
-    materials.push_back({ vec3(0.73f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+    materials.push_back({ 
+        .color = vec3(0.73f),
+        .reflectivity = 0.0f, 
+        .roughness = 0.0f, 
+        .refractive = false,
+        .refraction_index = 1.0f,
+        .emission = 0.0f 
+    });
 
     analytical_shape& floor = scene.emplace_back();
     floor.type = shape_type::PARALLELOGRAM;
@@ -622,17 +675,64 @@ void setup_cornell_box() {
     top.m_parallelogram.q = vec3(0.0f, 0.0f, -555.0f);
     top.material_idx = white_wall_mat;
 
-    // world.add(make_shared<quad>(point3(0,0,555), vec3(555,0,0), vec3(0,555,0), white));
     analytical_shape& back = scene.emplace_back();
     back.type = shape_type::PARALLELOGRAM;
     back.m_parallelogram.point = vec3(0.0f, 0.0f, 555.0f);
     back.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
     back.m_parallelogram.q = vec3(0.0f, 555.0f, 0.0f);
     back.material_idx = white_wall_mat;
+
+    // 
+    //analytical_shape& sphere = scene.emplace_back();
+    //sphere.type = shape_type::SPHERE;
+    //sphere.m_sphere.center = vec3(277.5f, 150.0f, 277.5f);
+    //sphere.m_sphere.radius = 150.0f;
+    //sphere.material_idx = materials.size();
+    //materials.push_back({ vec3(0.73f, 0.73f, 0.73f), 0.0f, 0.0f, false, 1.0f, 0.0f });
+
+    mat = materials.size();
+    materials.push_back({
+        .color = vec3(0.0f, 0.0f, 1.0f),
+        .reflectivity = 0.0f,
+        .roughness = 0.0f,
+        .refractive = false,
+        .refraction_index = 1.0f,
+        .emission = 0.0f
+        });
+
+    //load_obj("../resources/bunny.obj", positions, normals, texcoords, indices);
+    load_obj("../resources/dragon.obj", positions, normals, texcoords, indices);
+    //load_obj("../resources/tetrahedron.obj", positions, normals, texcoords, indices);
+    build_bvh(bvh, positions, indices);
+
+    glm::vec3 min_pos = positions[0];
+    glm::vec3 max_pos = positions[0];
+    for (const auto& v : positions) {
+        min_pos = glm::min(min_pos, v);
+        max_pos = glm::max(max_pos, v);
+    }
+    glm::vec3 obj_center = (min_pos + max_pos) * 0.5f;
+    glm::vec3 obj_size = max_pos - min_pos;
+
+    vec3 box_center = vec3(555.0f, 555.0f, 555.0f) * 0.5f;
+
+    float target_size = 500.f;
+    float scale_factor = target_size / glm::compMax(obj_size);
+
+    model = glm::translate(glm::mat4(1.0f), box_center) *
+        glm::rotate(glm::mat4(1.0f), glm::radians(180.f), glm::vec3(0.0f, 1.0f, 0.0f)) *
+        glm::scale(glm::mat4(1.0f), glm::vec3(scale_factor)) *
+        glm::translate(glm::mat4(1.0f), -obj_center);
+
+    inv_model = glm::inverse(model);
 }
 
-// usage ./RT <IMAGE SIZE> <IMAGE FILENAME>
 int main(int argc, char **argv) {
+    if (argc != 3) {
+        printf("usage ./RT <IMAGE SIZE> <IMAGE FILENAME>\n");
+        return 1;
+    }
+
 	int imageSize(stoi(argv[1]));
 	string fileName(argv[2]);
 	
@@ -642,7 +742,6 @@ int main(int argc, char **argv) {
 	int res = imageSize;
 
 	vector<ray> rays; // todo alloc total rays
-
 
     vec3 camera_pos = vec3(278, 278, -800);
     vec3 camera_target = vec3(278, 278, 0);
@@ -691,7 +790,7 @@ int main(int argc, char **argv) {
 			int idx = x * res + y;
 			// vec3 c = trace_whitted(scene, lights, rays[idx]);
 
-            int samples_per_pixel = 50;
+            int samples_per_pixel = 25;
 
             vec3 c(0.0f);
             for (int s = 0; s < samples_per_pixel; s++) {
@@ -707,54 +806,3 @@ int main(int argc, char **argv) {
 	image.writeToFile("../resources/" + fileName + ".png");
 	return 0;
 }
-
-// gonna want this later
-// int intersectTri(ray* r, tri* triangle, float* t, float* u, float* v) { 
-// 	vec3 orig = r->pos;
-// 	vec3 dir = r->dir;
-// 	vec3 vert0 = triangle->v1;
-// 	vec3 vert1 = triangle->v2;
-// 	vec3 vert2 = triangle->v3;
-
-// 	vec3 edge1(0.0f), edge2(0.0f), tvec(0.0f), pvec(0.0f), qvec(0.0f);
-// 	float det, inv_det;
-
-// 	edge1 = vert1 - vert0;
-// 	edge2 = vert2 - vert0;
-
-// 	pvec = glm::cross(dir, edge2);
-
-// 	det = dot(edge1, pvec);
-
-// 	tvec = orig - vert0;
-// 	inv_det = 1.0 / det;
-
-// 	qvec = glm::cross(tvec, edge1);
-
-// 	if (det > 0.000001) {
-// 		*u = dot(tvec, pvec);
-// 		if (*u < 0.0 || *u > det)
-// 			return 0;
-
-// 		*v = dot(dir, qvec);
-// 		if (*v < 0.0 || *u + *v > det)
-// 			return 0;
-// 	} else if (det < -0.000001) {
-// 		*u = dot(tvec, pvec);
-// 		if (*u > 0.0 || *u < det)
-// 			return 0;
-		
-// 		*v = dot(dir, qvec);
-// 		if (*v > 0.0 || *u + *v < det)
-// 			return 0;
-// 	} else {
-// 		return 0;
-// 	}
-
-// 	*t = dot(edge2, qvec) * inv_det;
-// 	(*u) *= inv_det;
-// 	(*v) *= inv_det;
-
-// 	return 1;
-
-// }

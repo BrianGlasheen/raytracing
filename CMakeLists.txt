@@ -11,22 +11,28 @@ OPTION(SOL "Solution" OFF)
 # We don't really need to include header and resource files to build, but it's
 # nice to have them also show up in IDEs.
 IF(${SOL})
-	FILE(GLOB_RECURSE SOURCES "src0/*.cpp")
+	FILE(GLOB_RECURSE SOURCES 
+		"src0/*.cpp"
+		"external/Image.cpp"
+	)
 	FILE(GLOB_RECURSE HEADERS "src0/*.h")
 ELSE()
-	FILE(GLOB_RECURSE SOURCES "src/*.cpp")
+	FILE(GLOB_RECURSE SOURCES 
+		"src/*.cpp"
+		"external/Image.cpp"
+	)
 	FILE(GLOB_RECURSE HEADERS "src/*.h")
 ENDIF()
 
 include_directories(
     external/glm
+	external/
 )
 
 # Set the executable.
 ADD_EXECUTABLE(${CMAKE_PROJECT_NAME} ${SOURCES} ${HEADERS})
 
-# Use c++17 todo prob move to 20
-SET_TARGET_PROPERTIES(${CMAKE_PROJECT_NAME} PROPERTIES CXX_STANDARD 17)
+SET_TARGET_PROPERTIES(${CMAKE_PROJECT_NAME} PROPERTIES CXX_STANDARD 20)
 SET_TARGET_PROPERTIES(${CMAKE_PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 
 find_package(OpenMP REQUIRED)
