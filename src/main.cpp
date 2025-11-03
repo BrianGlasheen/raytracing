@@ -18,12 +18,16 @@
 using std::vector, std::stoi, std::string, std::to_string, std::max, std::min;
 
 vector<vec3> positions;
+vector<uint32> indices;
 vector<vec3> normals;
 vector<vec2> texcoords;
-vector<uint32> indices;
-mat4 model, inv_model;
-vector<bvh_node> bvh;
-size_t mat;
+
+vector<model> models;
+
+// tlas
+struct tlas {
+    // bvh over blas's
+};
 
 // todo mesh
 // struct mesh {
@@ -173,23 +177,26 @@ bool ray_aabb_intersection_bool(const ray& r, const vec3& bmin, const vec3& bmax
     return tmax >= tmin && tmax > 0;
 }
 
-void ray_bvh_intersection(const ray& ray, const uint32 node_index, hit& closest_hit) {
-    bvh_node& node = bvh[node_index];
+void ray_bvh_intersection(const ray& ray, const vector<bvh_node>& blas, const uint32 node_index, hit& closest_hit) {
+    //printf("node index: %d\n", node_index);
+
+    const bvh_node& node = blas[node_index];
     if (!ray_aabb_intersection_bool(ray, node.aabb_min, node.aabb_max))
         return;
 
-    if (node.primCount > 0) {
-        for (uint32_t i = 0; i < node.primCount; i++) {
-            uint32_t tri_index = (node.firstPrim * 3) + i;
+    if (node.count > 0) {
+        for (uint32_t i = 0; i < node.count; i++) {
+            uint32_t tri_index = (node.left_first * 3) + i;
             hit h = ray_triangle_intersection(tri_index, ray);
             if (h.hit && h.t < closest_hit.t) {
                 closest_hit = h;
             }
+            printf("HIT TRIANLE\n");
         }
     }
     else {
-        ray_bvh_intersection(ray, node.left, closest_hit);
-        ray_bvh_intersection(ray, node.left + 1, closest_hit);
+        ray_bvh_intersection(ray, blas, node.left_first, closest_hit);
+        ray_bvh_intersection(ray, blas, node.left_first + 1, closest_hit);
     }
 }
 
@@ -304,6 +311,40 @@ vec3 trace_whitted(const vector<analytical_shape>& scene, const vector<light>& l
 			closest_hit = hit_info;
 	}
 
+//#define BVH 1
+//#if !BVH
+//    for (uint32 i = 0; i < indices.size(); i += 3) {
+//        ray r_obj;
+//        r_obj.pos = vec3((inv_model * glm::vec4(r.pos, 1.0f)));
+//        r_obj.dir = vec3(normalize(inv_model * glm::vec4(r.dir, 0.0f)));
+//
+//        hit hit_info = ray_triangle_intersection(i, r_obj);
+//        if (hit_info.hit && hit_info.t < closest_hit.t) {
+//            closest_hit.hit = true;
+//            closest_hit.t = hit_info.t;
+//            closest_hit.pos = vec3(model * glm::vec4(hit_info.pos, 1.0f));
+//            closest_hit.norm = vec3(normalize(glm::transpose(inv_model) * glm::vec4(hit_info.norm, 0.0f)));
+//            closest_hit.material_idx = 0;
+//        }
+//    }
+//#else
+//    ray r_obj;
+//    r_obj.pos = vec3((inv_model * glm::vec4(r.pos, 1.0f)));
+//    r_obj.dir = vec3(normalize(inv_model * glm::vec4(r.dir, 0.0f)));
+//
+//    //const ray& ray, const uint32 node_index, hit& closest_hit
+//    hit bvh_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
+//    ray_bvh_intersection(r_obj, 0, bvh_hit);
+//
+//    if (bvh_hit.hit && bvh_hit.t < closest_hit.t) {
+//        closest_hit.hit = true;
+//        closest_hit.t = bvh_hit.t;
+//        closest_hit.pos = vec3(model * glm::vec4(bvh_hit.pos, 1.0f));
+//        closest_hit.norm = vec3(normalize(glm::transpose(inv_model) * glm::vec4(bvh_hit.norm, 0.0f)));
+//        closest_hit.material_idx = mat;
+//    }
+//#endif
+
 	if (!closest_hit.hit) {
 		vec3 unit_dir = glm::normalize(r.dir);
 		float t = 0.5f * (unit_dir.y + 1.0f);
@@ -398,7 +439,7 @@ vec3 trace_whitted(const vector<analytical_shape>& scene, const vector<light>& l
 }
 
 vec3 trace_monte(const vector<analytical_shape>& scene, const ray& r, int depth = 0) {
-	const int MAX_DEPTH = 4;
+	const int MAX_DEPTH = 16;
     if (depth >= MAX_DEPTH) {
         return vec3(0.0f);
     }
@@ -410,39 +451,33 @@ vec3 trace_monte(const vector<analytical_shape>& scene, const ray& r, int depth 
 		if (hit_info.hit && hit_info.t < closest_hit.t)
 			closest_hit = hit_info;
 	}
-#define BVH 1
-#if !BVH
-    for (uint32 i = 0; i < indices.size(); i += 3) {
-        ray r_obj;
-        r_obj.pos = vec3((inv_model * glm::vec4(r.pos, 1.0f)));
-        r_obj.dir = vec3(normalize(inv_model * glm::vec4(r.dir, 0.0f)));
 
-        hit hit_info = ray_triangle_intersection(i, r_obj);
-        if (hit_info.hit && hit_info.t < closest_hit.t) {
-            closest_hit.hit = true;
-            closest_hit.t = hit_info.t;
-            closest_hit.pos = vec3(model * glm::vec4(hit_info.pos, 1.0f));
-            closest_hit.norm = vec3(normalize(glm::transpose(inv_model) * glm::vec4(hit_info.norm, 0.0f)));
-            closest_hit.material_idx = 0;
+    for (const model& m : models) {
+        //printf("chekcing for model\n");
+
+        ray r_obj = {
+            .pos = vec3((m.inv_transform * glm::vec4(r.pos, 1.0f))),
+            .dir = vec3(normalize(m.inv_transform * glm::vec4(r.dir, 0.0f)))
+        };
+
+        hit bvh_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
+        ray_bvh_intersection(r_obj, m.bvh, 0, bvh_hit);
+
+        if (bvh_hit.hit) {
+            printf("bvh hit");
+
+            vec3 world_pos = vec3(m.transform * glm::vec4(bvh_hit.pos, 1.0f));
+            float world_t = glm::length(world_pos - r.pos);
+
+            if (world_t < closest_hit.t) {
+                closest_hit.hit = true;
+                closest_hit.t = world_t;
+                closest_hit.pos = world_pos;
+                closest_hit.norm = vec3(normalize(glm::transpose(m.inv_transform) * glm::vec4(bvh_hit.norm, 0.0f)));
+                closest_hit.material_idx = m.mat;
+            }
         }
     }
-#else
-    ray r_obj;
-    r_obj.pos = vec3((inv_model * glm::vec4(r.pos, 1.0f)));
-    r_obj.dir = vec3(normalize(inv_model * glm::vec4(r.dir, 0.0f)));
-
-    //const ray& ray, const uint32 node_index, hit& closest_hit
-    hit bvh_hit = { false, vec3(0.0f), FLT_MAX, vec3(0.0f) };
-    ray_bvh_intersection(r_obj, 0, bvh_hit);
-
-    if (bvh_hit.hit && bvh_hit.t < closest_hit.t) {
-        closest_hit.hit = true;
-        closest_hit.t = bvh_hit.t;
-        closest_hit.pos = vec3(model * glm::vec4(bvh_hit.pos, 1.0f));
-        closest_hit.norm = vec3(normalize(glm::transpose(inv_model) * glm::vec4(bvh_hit.norm, 0.0f)));
-        closest_hit.material_idx = mat;
-    }
-#endif
 
 	if (!closest_hit.hit) {
         return vec3(0.0f);
@@ -594,7 +629,7 @@ void setup_scene() {
 	// 	float emission;
 	// };
 
-	light& l1 = lights.emplace_back();
+   	light& l1 = lights.emplace_back();
 	l1.pos = vec3(1.0f, 2.0f, 2.0f);
 	l1.intensity = 0.75f;
 	l1.color = vec3(1.5f);
@@ -606,36 +641,72 @@ void setup_scene() {
 }
 
 void setup_cornell_box() {
-    analytical_shape& right_wall = scene.emplace_back();
-    right_wall.type = shape_type::PARALLELOGRAM;
-    right_wall.m_parallelogram.point = vec3(555.0f, 0.0f, 0.0f);
-    right_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
-    right_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
-    right_wall.material_idx = materials.size();
-    materials.push_back({
-        .color = vec3(0.12f, 0.45f, 0.15f),
-        .reflectivity = 0.0f,
-        .roughness = 0.0f,
-        .refractive = false,
-        .refraction_index = 1.0f,
-        .emission = 0.0f
-    });
+    //analytical_shape& right_wall = scene.emplace_back();
+    //right_wall.type = shape_type::PARALLELOGRAM;
+    //right_wall.m_parallelogram.point = vec3(555.0f, 0.0f, 0.0f);
+    //right_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
+    //right_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
+    //right_wall.material_idx = materials.size();
+    //materials.push_back({
+    //    .color = vec3(0.12f, 0.45f, 0.15f),
+    //    .reflectivity = 0.0f,
+    //    .roughness = 0.0f,
+    //    .refractive = false,
+    //    .refraction_index = 1.0f,
+    //    .emission = 0.0f
+    //});
 
-    analytical_shape& left_wall = scene.emplace_back();
-    left_wall.type = shape_type::PARALLELOGRAM;
-    left_wall.m_parallelogram.point = vec3(0.0f);
-    left_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
-    left_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
-    left_wall.material_idx = materials.size();
-    materials.push_back({
-        .color = vec3(0.65f, 0.05f, 0.05f),
-        .reflectivity = 0.0f,
-        .roughness = 0.0f,
-        .refractive = false,
-        .refraction_index = 1.0f,
-        .emission = 0.0f
-    });
-    
+    //analytical_shape& left_wall = scene.emplace_back();
+    //left_wall.type = shape_type::PARALLELOGRAM;
+    //left_wall.m_parallelogram.point = vec3(0.0f);
+    //left_wall.m_parallelogram.p = vec3(0.0f, 555.0f, 0.0f);
+    //left_wall.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
+    //left_wall.material_idx = materials.size();
+    //materials.push_back({
+    //    .color = vec3(0.65f, 0.05f, 0.05f),
+    //    .reflectivity = 0.0f,
+    //    .roughness = 0.0f,
+    //    .refractive = false,
+    //    .refraction_index = 1.0f,
+    //    .emission = 0.0f
+    //});
+
+    ////light& l2 = lights.emplace_back();
+    ////l2.pos = vec3(343.0f, 500.0f, 332.0f);
+    ////l2.intensity = 0.5f;
+    ////l2.color = vec3(1.0f);
+
+    //size_t white_wall_mat = materials.size();
+    //materials.push_back({ 
+    //    .color = vec3(0.73f),
+    //    .reflectivity = 0.0f, 
+    //    .roughness = 0.0f, 
+    //    .refractive = false,
+    //    .refraction_index = 1.0f,
+    //    .emission = 0.0f 
+    //});
+
+    //analytical_shape& floor = scene.emplace_back();
+    //floor.type = shape_type::PARALLELOGRAM;
+    //floor.m_parallelogram.point = vec3(0.0f);
+    //floor.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
+    //floor.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
+    //floor.material_idx = white_wall_mat;
+
+    //analytical_shape& top = scene.emplace_back();
+    //top.type = shape_type::PARALLELOGRAM;
+    //top.m_parallelogram.point = vec3(555.0f);
+    //top.m_parallelogram.p = vec3(-555.0f, 0.0f, 0.0f);
+    //top.m_parallelogram.q = vec3(0.0f, 0.0f, -555.0f);
+    //top.material_idx = white_wall_mat;
+
+    //analytical_shape& back = scene.emplace_back();
+    //back.type = shape_type::PARALLELOGRAM;
+    //back.m_parallelogram.point = vec3(0.0f, 0.0f, 555.0f);
+    //back.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
+    //back.m_parallelogram.q = vec3(0.0f, 555.0f, 0.0f);
+    //back.material_idx = white_wall_mat;
+
     analytical_shape& light = scene.emplace_back();
     light.type = shape_type::PARALLELOGRAM;
     light.m_parallelogram.point = vec3(343.0f, 554.0f, 332.0f);
@@ -648,62 +719,21 @@ void setup_cornell_box() {
         .roughness = 0.0f,
         .refractive = false,
         .refraction_index = 1.0f,
-        .emission = 10.0f
+        .emission = 15.0f
     });
 
-    size_t white_wall_mat = materials.size();
-    materials.push_back({ 
-        .color = vec3(0.73f),
-        .reflectivity = 0.0f, 
-        .roughness = 0.0f, 
-        .refractive = false,
-        .refraction_index = 1.0f,
-        .emission = 0.0f 
-    });
-
-    analytical_shape& floor = scene.emplace_back();
-    floor.type = shape_type::PARALLELOGRAM;
-    floor.m_parallelogram.point = vec3(0.0f);
-    floor.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
-    floor.m_parallelogram.q = vec3(0.0f, 0.0f, 555.0f);
-    floor.material_idx = white_wall_mat;
-
-    analytical_shape& top = scene.emplace_back();
-    top.type = shape_type::PARALLELOGRAM;
-    top.m_parallelogram.point = vec3(555.0f);
-    top.m_parallelogram.p = vec3(-555.0f, 0.0f, 0.0f);
-    top.m_parallelogram.q = vec3(0.0f, 0.0f, -555.0f);
-    top.material_idx = white_wall_mat;
-
-    analytical_shape& back = scene.emplace_back();
-    back.type = shape_type::PARALLELOGRAM;
-    back.m_parallelogram.point = vec3(0.0f, 0.0f, 555.0f);
-    back.m_parallelogram.p = vec3(555.0f, 0.0f, 0.0f);
-    back.m_parallelogram.q = vec3(0.0f, 555.0f, 0.0f);
-    back.material_idx = white_wall_mat;
-
-    // 
-    //analytical_shape& sphere = scene.emplace_back();
-    //sphere.type = shape_type::SPHERE;
-    //sphere.m_sphere.center = vec3(277.5f, 150.0f, 277.5f);
-    //sphere.m_sphere.radius = 150.0f;
-    //sphere.material_idx = materials.size();
-    //materials.push_back({ vec3(0.73f, 0.73f, 0.73f), 0.0f, 0.0f, false, 1.0f, 0.0f });
-
-    mat = materials.size();
+    size_t mat = materials.size();
     materials.push_back({
         .color = vec3(0.0f, 0.0f, 1.0f),
         .reflectivity = 0.0f,
         .roughness = 0.0f,
         .refractive = false,
         .refraction_index = 1.0f,
-        .emission = 0.0f
-        });
+        .emission = 1000.0f
+    });
 
-    //load_obj("../resources/bunny.obj", positions, normals, texcoords, indices);
-    load_obj("../resources/dragon.obj", positions, normals, texcoords, indices);
-    //load_obj("../resources/tetrahedron.obj", positions, normals, texcoords, indices);
-    build_bvh(bvh, positions, indices);
+    model new_model = load_model("../resources/dragon.obj", positions, normals, texcoords, indices);
+    //model new_model = load_model("../resources/bunny.obj", positions, normals, texcoords, indices);
 
     glm::vec3 min_pos = positions[0];
     glm::vec3 max_pos = positions[0];
@@ -719,12 +749,15 @@ void setup_cornell_box() {
     float target_size = 500.f;
     float scale_factor = target_size / glm::compMax(obj_size);
 
-    model = glm::translate(glm::mat4(1.0f), box_center) *
-        glm::rotate(glm::mat4(1.0f), glm::radians(180.f), glm::vec3(0.0f, 1.0f, 0.0f)) *
-        glm::scale(glm::mat4(1.0f), glm::vec3(scale_factor)) *
-        glm::translate(glm::mat4(1.0f), -obj_center);
+    new_model.transform = translate(glm::mat4(1.0f), vec3(0.0f)) *
+        rotate(glm::mat4(1.0f), radians(180.f), glm::vec3(0.0f, 1.0f, 0.0f)) *
+        scale(glm::mat4(1.0f), vec3(scale_factor));
 
-    inv_model = glm::inverse(model);
+    //new_model.transform = scale(mat4(1.0f), vec3(50.0f));
+    new_model.inv_transform = inverse(new_model.transform);
+    new_model.mat = mat;
+
+    models.push_back(new_model);
 }
 
 int main(int argc, char **argv) {
@@ -789,9 +822,10 @@ int main(int argc, char **argv) {
 
 			int idx = x * res + y;
 			// vec3 c = trace_whitted(scene, lights, rays[idx]);
+   //          int samples_per_pixel = 1;
+
 
             int samples_per_pixel = 25;
-
             vec3 c(0.0f);
             for (int s = 0; s < samples_per_pixel; s++) {
                 c += trace_monte(scene, rays[idx], 0);

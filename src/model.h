@@ -3,12 +3,22 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 
+#include "bvh.h"
 #include "math.h"
 
 #include <vector>
 #include <string>
 
 using std::vector, std::string;
+
+struct model {
+    mat4 transform;
+    mat4 inv_transform;
+    size_t mat; // material
+    vec3 aabb_min, aabb_max; // same as root nodes aabb
+    uint32 base_index, index_count;
+    vector<bvh_node> bvh; // blas
+};
 
 void load_obj(const string& name, vector<vec3>& positions, vector<vec3>& normals, vector<vec2>& texcoords, vector<uint32>& indices) {
     printf("loading %s\n", name.c_str());
@@ -75,4 +85,30 @@ void load_obj(const string& name, vector<vec3>& positions, vector<vec3>& normals
     printf("positions %d\n", (uint32)positions.size());
     printf("normals %d\n", (uint32)normals.size());
     printf("indices %d\n", (uint32)indices.size());
+}
+
+model load_model(const string& name, vector<vec3>& positions, vector<vec3>& normals, vector<vec2>& texcoords, vector<uint32>& indices) {
+    // todo check if model loaded
+    // if so return copy
+
+    model my_model = { 0 };
+    my_model.transform = mat4(1.0f); // todo argument
+    my_model.inv_transform = inverse(my_model.transform);
+    //my_model.mat = 0; todo
+
+    my_model.base_index = indices.size();
+    load_obj(name, positions, normals, texcoords, indices);
+    my_model.index_count = indices.size() - my_model.base_index;
+
+    build_bvh(my_model.bvh, positions, indices, my_model.base_index, my_model.index_count);
+    //build_bvh(bvh, positions, indices);
+
+    // load data into global buffers
+    // build blas over model
+    // set model's aabb for tlas
+
+    my_model.aabb_min = my_model.bvh[0].aabb_min;
+    my_model.aabb_max = my_model.bvh[0].aabb_max;
+
+    return my_model;
 }

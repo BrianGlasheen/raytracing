@@ -9,4 +9,5 @@
 
 typedef uint32_t uint32;
 
-using glm::vec2, glm::vec3, glm::vec4, glm::mat4, glm::mat3, glm::dot, glm::reflect, glm::inverse, glm::determinant, glm::clamp, glm::cross;
+using glm::vec2, glm::vec3, glm::vec4, glm::mat4, glm::mat3;
+using glm::dot, glm::reflect, glm::inverse, glm::determinant, glm::clamp, glm::cross, glm::radians, glm::rotate;
